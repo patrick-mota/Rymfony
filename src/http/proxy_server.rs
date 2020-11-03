@@ -1,9 +1,15 @@
+#[allow(unused_imports)]
+
+use crate::http::fastcgi_handler::handle_fastcgi;
+
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use console::style;
 use hyper::server::conn::AddrStream;
+use hyper::server::conn::AddrIncoming;
 use hyper::service::make_service_fn;
 use hyper::service::service_fn;
 use hyper::Body;
@@ -12,7 +18,20 @@ use hyper::Response;
 use hyper::Server;
 use hyper_staticfile::Static;
 
-use crate::http::fastcgi_handler::handle_fastcgi;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio_native_tls::native_tls::TlsAcceptor;
+use tokio_native_tls::native_tls::Identity;
+use warp::{Filter, method};
+use http::Method;
+use http::HeaderMap;
+use warp::filters::path::FullPath;
+use warp::filters::header::headers_cloned;
+use tokio::stream::Stream;
+use std::collections::HashMap;
+use hyper::body::Bytes;
 
 #[tokio::main]
 pub(crate) async fn start(
@@ -21,7 +40,42 @@ pub(crate) async fn start(
     document_root: String,
     php_entrypoint_file: String,
 ) {
-    let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], http_port));
+    /*
+    // Bind the server's socket
+    let addr = "127.0.0.1:12345".to_string();
+    let mut tcp: TcpListener = TcpListener::bind(&addr).await?;
+
+    // Create the TLS acceptor.
+    let der = include_bytes!("identity.p12");
+    let cert = Identity::from_pkcs12(der, "mypass")?;
+    let tls_acceptor = TlsAcceptor::builder(cert).build()?;
+    loop {
+        // Asynchronously wait for an inbound socket.
+        let (socket, remote_addr) = tcp.accept().await?;
+        let tls_acceptor = tls_acceptor.clone();
+        println!("accept connection from {}", remote_addr);
+        tokio::spawn(async move {
+            // Accept the TLS connection.
+            let mut tls_stream = tls_acceptor.accept(socket).await.expect("accept error");
+            // In a loop, read data from the socket and write the data back.
+
+            let mut buf = [0; 1024];
+            let n = tls_stream
+                .read(&mut buf)
+                .await
+                .expect("failed to read data from socket");
+
+            if n == 0 {
+                return;
+            }
+            tls_stream
+                .write_all(&buf[0..n])
+                .await
+                .expect("failed to write data to socket");
+        });
+    }
+
+    let http_addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], http_port));
     let static_files_server = Static::new(Path::new(&document_root));
 
     let document_root = document_root.clone();
@@ -77,14 +131,30 @@ pub(crate) async fn start(
         }
     });
 
-    let http_server = Server::bind(&addr).serve(make_service);
+    let http_server = Server::builder(AddrIncoming::bind(&http_addr).unwrap_or_else(|e| {
+        panic!("error binding to {}: {}", http_addr, e);
+    }))
+        .serve(make_service);
+    */
 
-    info!(
-        "Server listening to {}",
-        style(format!("http://{}", addr)).cyan()
-    );
+    let routes = warp::any()
+        .and(method())
+        .and(warp::path::full())
+        .and(warp::query::<HashMap<String, String>>())
+        .and(headers_cloned())
+        .and(warp::body::bytes())
+        .map(|method: Method, path: FullPath, query: HashMap<String, String>, headers: HeaderMap, body: Bytes| {
+            dbg!(method);
+            dbg!(path);
+            dbg!(query);
+            dbg!(headers);
+            dbg!(body);
+            "Hello!"
+        })
+    ;
 
-    http_server.await.unwrap();
+    warp::serve(routes).run(([127, 0, 0, 1], http_port)).await;
+    // http_server.await.unwrap();
 }
 
 async fn serve_static(
